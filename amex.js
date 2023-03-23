@@ -1,5 +1,5 @@
-const { chromium } = require('playwright');
-const { open } = require('node:fs/promises');
+import { chromium } from 'playwright';
+import { open } from 'node:fs/promises';
 
 async function readVariables(filepath) {
   const file = await open(filepath);
@@ -11,7 +11,12 @@ async function readVariables(filepath) {
   return vars;
 }
 
-(async () => {
+function parseDate(d, year, month) {
+  const date = d.split(' ')[1].padStart(2, '0');
+  return `${year}-${month}-${date}`;
+}
+
+export default async function processAmex() {
   // read login info and create browser
   const env = await readVariables('.env');
   const browser = await chromium.launch({
@@ -22,7 +27,7 @@ async function readVariables(filepath) {
   const page = await browser.newPage();
   await page.goto('https://americanexpress.com');
   await page.getByRole('link', { name: 'Log In', exact: true }).click();
-  await page.waitForLoadState('networkidle');
+  await page.locator('#eliloUserID').waitFor();
   await page.locator('#eliloUserID').fill(env.AMEX_LOGIN);
   await page.locator('#eliloPassword').fill(env.AMEX_PASSWORD);
   await page.locator('#loginSubmit').click();
@@ -55,12 +60,13 @@ async function readVariables(filepath) {
     console.log('No pending charges');
     rows = await page.getByRole('table').locator('tbody').locator('div').all();
   }
+  const transactions = [];
   for (const row of rows) {
     const res = await row.getAttribute('id');
     if (res !== null && res.includes('transaction')) {
       const transactionNumber = res.split('_')[1];
       let output = `Transaction ${transactionNumber}\n`;
-      const transactionDate = await row.locator('label').textContent();
+      const transactionDate = parseDate(await row.locator('label').textContent(), todayYear, todayMonth);
       const transactionAmount = await row.locator('p', { hasText: /\$\d+\.\d{2}/ }).first().textContent();
       let transactionMerchant = await row.locator('a').textContent();
       transactionMerchant = transactionMerchant.split(' ').filter((s) => s.length > 0).join(' ');
@@ -68,7 +74,13 @@ async function readVariables(filepath) {
       output += `Amount: ${transactionAmount}\n`;
       output += `Merchant: ${transactionMerchant}\n`;
       console.log(output);
+      transactions.push({
+        date: transactionDate,
+        amount: transactionAmount,
+        merchant: transactionMerchant,
+      });
     }
   }
   await browser.close();
-})();
+  return transactions;
+}
